@@ -147,6 +147,8 @@ method fetchrow_typedhash {
     for 0..(@values.elems-1) -> $i {
         given (%oid-to-type-name{@types[$i]}) {
             %hash{@names[$i]} = @values[$i] when 'Str';
+            %hash{@names[$i]} = @values[$i] when 'Array<Str>';
+            %hash{@names[$i]} = @values[$i] when 'Array<Int>';
             %hash{@names[$i]} = @values[$i].Num when 'Num';
             %hash{@names[$i]} = @values[$i].Int when 'Int';
             %hash{@names[$i]} = %p{@values[$i]} when 'Bool';
