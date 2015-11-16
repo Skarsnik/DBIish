@@ -136,6 +136,37 @@ method fetchall_hashref(Str $key) {
     return $results_ref;
 }
 
+my grammar PgArrayGrammar {
+    token TOP         { ^ <array> $ }
+    rule array        { '{' (<element> ','?)+ '}' }
+    rule element      { <array> | <number> | <string> }
+    rule number       { (\d+) }
+    rule string       { '"' $<value>=( [\w|\s]+ ) '"' | $<value>=( \w+ ) }
+};
+
+sub _to-array(Match $match) {
+    my @array;
+    for $match.<array>.values -> $element {
+        if $element.values[0]<array>.defined {
+            # An array
+            push @array, _to-array( $element.values[0] );
+        } elsif $element.values[0]<number>.defined {
+            # Number
+            push @array, +$element.values[0]<number>;
+        } else {
+            # Must be a String
+            push @array, ~$element.values[0]<string><value>;
+        }
+    }
+    return @array;
+}
+
+sub _pg-to-array(Str $text) {
+    my $match = PgArrayGrammar.parse( $text );
+    die "Failed to parse" unless $match.defined;
+    return _to-array($match);
+}
+
 #Try to map pg type to perl type
 method fetchrow_typedhash {
     my Str @values = self.fetchrow_array;
@@ -147,8 +178,8 @@ method fetchrow_typedhash {
     for 0..(@values.elems-1) -> $i {
         given (%oid-to-type-name{@types[$i]}) {
             %hash{@names[$i]} = @values[$i] when 'Str';
-            %hash{@names[$i]} = @values[$i] when 'Array<Str>';
-            %hash{@names[$i]} = @values[$i] when 'Array<Int>';
+            %hash{@names[$i]} = _pg-to-array( @values[$i] ) when 'Array<Str>';
+            %hash{@names[$i]} = _pg-to-array( @values[$i] ) when 'Array<Int>';
             %hash{@names[$i]} = @values[$i].Num when 'Num';
             %hash{@names[$i]} = @values[$i].Int when 'Int';
             %hash{@names[$i]} = %p{@values[$i]} when 'Bool';
