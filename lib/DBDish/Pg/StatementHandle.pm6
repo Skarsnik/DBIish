@@ -137,37 +137,56 @@ method fetchall_hashref(Str $key) {
 }
 
 my grammar PgArrayGrammar {
-    token TOP         { ^ <array> $ }
-    rule array        { '{' (<element> ','?)+ '}' }
-    rule element      { <array> | <number> | <string> }
-    rule number       { (\d+) }
+    rule array        { '{' (<element> ','?)* '}' }
+    rule TOP         { ^ <array> $ }
+    rule element      { <array> | <float> | <integer> | <string> }
+    token float        { (\d+ '.' \d+) }
+    token integer      { (\d+) }
     rule string       { '"' $<value>=( [\w|\s]+ ) '"' | $<value>=( \w+ ) }
 };
 
-sub _to-array(Match $match) {
+sub _to-type($value, Str $type where $_ eq any([ 'Str', 'Num', 'Int' ])) {
+  return $value unless $value.defined;
+  if $type eq 'Str' {
+      # String
+      return ~$value;
+  } elsif $type eq 'Num' {
+      # Floating point number
+      return Num($value);
+  } else {
+      # Must be Int
+      return Int($value);
+  }
+}
+
+sub _to-array(Match $match, Str $type where $_ eq any([ 'Str', 'Num', 'Int' ])) {
     my @array;
     for $match.<array>.values -> $element {
-        if $element.values[0]<array>.defined {
-            # An array
-            push @array, _to-array( $element.values[0] );
-        } elsif $element.values[0]<number>.defined {
-            # Number
-            push @array, +$element.values[0]<number>;
-        } else {
-            # Must be a String
-            push @array, ~$element.values[0]<string><value>;
-        }
+      if $element.values[0]<array>.defined {
+          # An array
+          push @array, _to-array( $element.values[0], $type );
+      } elsif $element.values[0]<float>.defined {
+          # Floating point number
+          push @array, _to-type( $element.values[0]<float>, $type );
+      } elsif $element.values[0]<integer>.defined {
+          # Integer
+          push @array, _to-type( $element.values[0]<integer>, $type );
+      } else {
+          # Must be a String
+          push @array, _to-type( $element.values[0]<string><value>, $type );
+      }
     }
+
     return @array;
 }
 
-sub _pg-to-array(Str $text) {
+sub _pg-to-array(Str $text, Str $type where $_ eq any([ 'Str', 'Num', 'Int' ])) {
     my $match = PgArrayGrammar.parse( $text );
     die "Failed to parse" unless $match.defined;
-    return _to-array($match);
+    return _to-array($match, $type);
 }
 
-#Try to map pg type to perl type
+# Map pg type to perl type
 method fetchrow_typedhash {
     my Str @values = self.fetchrow_array;
     return Any if !@values.defined;
@@ -178,8 +197,9 @@ method fetchrow_typedhash {
     for 0..(@values.elems-1) -> $i {
         given (%oid-to-type-name{@types[$i]}) {
             %hash{@names[$i]} = @values[$i] when 'Str';
-            %hash{@names[$i]} = _pg-to-array( @values[$i] ) when 'Array<Str>';
-            %hash{@names[$i]} = _pg-to-array( @values[$i] ) when 'Array<Int>';
+            %hash{@names[$i]} = _pg-to-array( @values[$i], 'Str' ) when 'Array<Str>';
+            %hash{@names[$i]} = _pg-to-array( @values[$i], 'Int' ) when 'Array<Int>';
+            %hash{@names[$i]} = _pg-to-array( @values[$i], 'Num' ) when 'Array<Num>';
             %hash{@names[$i]} = @values[$i].Num when 'Num';
             %hash{@names[$i]} = @values[$i].Int when 'Int';
             %hash{@names[$i]} = %p{@values[$i]} when 'Bool';
